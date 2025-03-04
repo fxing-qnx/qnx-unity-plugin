@@ -1,12 +1,3 @@
-/.vscode
-/Assembly-CSharp-Editor.csproj
-/Assembly-CSharp.csproj
-/Library
-/Logs
-/My project (1).sln
-/Packages
-/ProjectSettings
-/Temp
-/UserSettings
-/Assets
+/*
 !/Assets/bbqnx
+!/clang-format
