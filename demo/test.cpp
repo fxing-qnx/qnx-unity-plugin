@@ -2,13 +2,16 @@
 #include <vector>
 
 #include <pthread.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <screen/screen.h>
 
 inline int chk_error(const char* file, int line, int err) noexcept
 {
     if (err != EOK)
     {
-        std::cout << file << ":" << line << ": " << strerror(errno) << "\n";
+        std::cout << "ERROR:" << file << ":" << line << ": " << strerror(errno) << "\n";
     }
     return err;
 }
@@ -48,27 +51,25 @@ int main(int argc, char** argv)
                   << "\n";
     }
 
-    // create result buffer
-    screen_buffer_t buf = nullptr;
-    std::vector<unsigned char> pixels(resolutions[0] * resolutions[1] * 4);
-    void* pixels_ptr = pixels.data();
-    int buf_res[] = {resolutions[0], resolutions[1]};
-    int buf_format = SCREEN_FORMAT_RGBA8888, //
-        buf_stride = resolutions[0] * 4,     //
-        buf_size = pixels.size();
-
-    chk(screen_create_buffer(&buf));
-    chk(screen_set_buffer_property_iv(buf, SCREEN_PROPERTY_FORMAT, &buf_format));
-    chk(screen_set_buffer_property_iv(buf, SCREEN_PROPERTY_BUFFER_SIZE, buf_res));
-    chk(screen_set_buffer_property_iv(buf, SCREEN_PROPERTY_SIZE, &buf_size));
-    chk(screen_set_buffer_property_iv(buf, SCREEN_PROPERTY_STRIDE, &buf_stride));
-    chk(screen_set_buffer_property_pv(buf, SCREEN_PROPERTY_POINTER, (void**)&pixels_ptr));
+    // create result pixmap
+    int pixmap_size[] = {resolutions[0], resolutions[1]};
+    int pixmap_format = SCREEN_FORMAT_RGBA8888, //
+        pixmap_usage = SCREEN_USAGE_READ | SCREEN_USAGE_NATIVE;
 
     screen_pixmap_t pixmap = nullptr;
-    int pixmap_usage = SCREEN_USAGE_READ | SCREEN_USAGE_WRITE | SCREEN_USAGE_NATIVE;
     chk(screen_create_pixmap(&pixmap, ctx));
     chk(screen_set_pixmap_property_iv(pixmap, SCREEN_PROPERTY_USAGE, &pixmap_usage));
-    chk(screen_attach_pixmap_buffer(pixmap, buf));
+    chk(screen_set_pixmap_property_iv(pixmap, SCREEN_PROPERTY_FORMAT, &pixmap_format));
+    chk(screen_set_pixmap_property_iv(pixmap, SCREEN_PROPERTY_BUFFER_SIZE, pixmap_size));
+    chk(screen_create_pixmap_buffer(pixmap));
+
+    // get pixmap buffer
+    screen_buffer_t pixmap_buf = nullptr;
+    int stride = 0;
+    uint32_t* mapping = nullptr;
+    chk(screen_get_pixmap_property_pv(pixmap, SCREEN_PROPERTY_RENDER_BUFFERS, (void**)&pixmap_buf));
+    chk(screen_get_buffer_property_pv(pixmap_buf, SCREEN_PROPERTY_POINTER, (void**)&mapping));
+    chk(screen_get_buffer_property_iv(pixmap_buf, SCREEN_PROPERTY_STRIDE, &stride));
 
     std::string line = "";
     while (std::getline(std::cin, line))
@@ -80,6 +81,14 @@ int main(int argc, char** argv)
 
         if (line == "capture")
         {
+            size_t selected_display = 0;
+            std::cout << "Selection display: ";
+            std::cin >> selected_display;
+            if (selected_display > displays.size())
+            {
+                selected_display = 0;
+            }
+            chk(screen_read_display(displays[0], pixmap_buf, 0, nullptr, 0));
         }
 
         while (!chk(screen_get_event(ctx, event, 0)))
@@ -109,7 +118,6 @@ int main(int argc, char** argv)
     }
 
     chk(screen_destroy_pixmap(pixmap));
-    chk(screen_destroy_buffer(buf));
     chk(screen_destroy_event(event));
     chk(screen_destroy_context(ctx));
 
