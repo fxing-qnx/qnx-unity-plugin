@@ -34,4 +34,3 @@ BraceWrapping:
   SplitEmptyNamespace: true
   BeforeLambdaBody: true
   BeforeWhile: true
-...
