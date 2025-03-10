@@ -3,12 +3,12 @@ CompileFlags:
     Add: 
         - -Wall
         - -std=c++14
-        - -xc++
         - -D__QNXNTO__
         - -D__QNX__=800
         - -D__AARCH64EL__
         - -D__LITTLEENDIAN__
         - -D_QNX_SOURCE
+        - -IC:\Users\fxing\Desktop\unity\Editor\Data\PluginAPI
 Diagnostics:
   Suppress:
     - drv_triple_version_invalid
