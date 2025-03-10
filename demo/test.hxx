@@ -2,22 +2,25 @@
 #define DEMO_TEST_HXX
 
 #include <iostream>
+#include <atomic>
 
 #include <pthread.h>
 #include <screen/screen.h>
 
 #include <EGL/egl.h>
-#include <GLES3/gl32.h>
-#include <GLES3/gl3platform.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#include <GLES3/gl3.h>
 
 namespace
 {
     inline auto // Check error of a call
     i_chk_error(const char* file, int line, int err) -> int
     {
-        if (err != EOK)
+        if (err != 0)
         {
-            std::cout << "ERROR: " << file << ":" << line << ": " << strerror(errno) << "\n";
+            std::cout << "ERROR: " << file << ":" << line << ": " << strerror(errno) << std::endl;
         }
         return err;
     }
@@ -72,7 +75,7 @@ namespace
 
         if (error != EGL_SUCCESS)
         {
-            std::cout << "EGL ERROR: " << file << ":" << line << ": " << get_erro_str() << "\n";
+            std::cout << "EGL ERROR: " << file << ":" << line << ": " << get_erro_str() << std::endl;
         }
 
         return std::forward<R>(r);
@@ -80,12 +83,63 @@ namespace
 } // namespace
 
 #ifndef NDEBUG
-static thread_local int tmp_err;
-#define chk(call)     (tmp_err = call, ::i_chk_error(__FILE__, __LINE__, tmp_err), tmp_err)
+#define chk(call)     ::i_chk_error(__FILE__, __LINE__, call)
 #define chk_egl(call) ::i_chk_egl_error(call, __FILE__, __LINE__)
 #else
 #define chk(call)     call
 #define chk_egl(call) call
 #endif
+
+static const char id_str[] = "test_unity_plugin";
+
+struct test_window_thr
+{
+    screen_context_t ctx_ = nullptr;
+    screen_window_t win_ = nullptr;
+    screen_buffer_t win_buf_[2] = {};
+
+    auto //
+    run(std::atomic_bool& running, const char* gid) -> void
+    {
+        int usage = SCREEN_USAGE_NATIVE | SCREEN_USAGE_READ | SCREEN_USAGE_WRITE,
+            format = SCREEN_FORMAT_RGBA8888, //
+            interval = 1,                    //
+            nbuffers = 2,                    //
+            size[2] = {200, 200},            //
+            pos[2] = {0, 0};
+        const char test_id_str[] = "test_window";
+
+        chk(screen_create_context(&ctx_, SCREEN_APPLICATION_CONTEXT));
+        chk(screen_create_window_type(&win_, ctx_, SCREEN_APPLICATION_WINDOW));
+        chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_USAGE, &usage));
+        chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_FORMAT, &format));
+        chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_SWAP_INTERVAL, &interval));
+        chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_SIZE, size));
+        chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_POSITION, pos));
+        chk(screen_set_window_property_cv(win_, SCREEN_PROPERTY_ID_STRING, sizeof(test_id_str), test_id_str));
+        chk(screen_create_window_buffers(win_, nbuffers));
+
+        chk(screen_join_window_group(win_, gid));
+
+        chk(screen_flush_context(ctx_, SCREEN_WAIT_IDLE));
+
+        int changing_color = 0;
+        while (running)
+        {
+            int win_background[] = {SCREEN_BLIT_COLOR, static_cast<int>(0xff000000) | (changing_color & 0x00ffffff),
+                                    SCREEN_BLIT_END};
+            changing_color++;
+
+            chk(screen_get_window_property_pv(win_, SCREEN_PROPERTY_BUFFERS, (void**)win_buf_));
+            chk(screen_fill(ctx_, win_buf_[0], win_background));
+            chk(screen_post_window(win_, win_buf_[0], 0, nullptr, SCREEN_WAIT_IDLE));
+        }
+
+        chk(screen_leave_window_group(win_));
+        chk(screen_destroy_window_buffers(win_));
+        chk(screen_destroy_window(win_));
+        chk(screen_destroy_context(ctx_));
+    }
+};
 
 #endif // DEMO_TEST_HXX
