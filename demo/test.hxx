@@ -105,12 +105,14 @@ struct test_window_thr
             format = SCREEN_FORMAT_RGBA8888, //
             interval = 1,                    //
             nbuffers = 2,                    //
-            size[2] = {200, 200},            //
+            size[2] = {1920, 1080},          //
             pos[2] = {0, 0};
         const char test_id_str[] = "test_window";
 
         chk(screen_create_context(&ctx_, SCREEN_APPLICATION_CONTEXT));
         chk(screen_create_window_type(&win_, ctx_, SCREEN_APPLICATION_WINDOW));
+        chk(screen_join_window_group(win_, gid));
+
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_USAGE, &usage));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_FORMAT, &format));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_SWAP_INTERVAL, &interval));
@@ -118,10 +120,6 @@ struct test_window_thr
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_POSITION, pos));
         chk(screen_set_window_property_cv(win_, SCREEN_PROPERTY_ID_STRING, sizeof(test_id_str), test_id_str));
         chk(screen_create_window_buffers(win_, nbuffers));
-
-        chk(screen_join_window_group(win_, gid));
-
-        chk(screen_flush_context(ctx_, SCREEN_WAIT_IDLE));
 
         int changing_color = 0;
         while (running)

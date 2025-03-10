@@ -7,7 +7,7 @@ main(int argc, char** argv) -> int
 {
     screen_context_t screen_ctx = nullptr;
     screen_event_t screen_ev = nullptr;
-    screen_window_t root_win = nullptr;
+    screen_window_t win = nullptr;
     screen_group_t group = nullptr;
     std::atomic_bool running(true);
     int usage = SCREEN_USAGE_NATIVE;
@@ -17,19 +17,21 @@ main(int argc, char** argv) -> int
     PFNGLEGLIMAGETARGETTEXTURE2DOESPROC fglEGLImageTargetTexture2D = nullptr;
 
     chk(screen_create_context(&screen_ctx, SCREEN_BUFFER_PROVIDER_CONTEXT));
-    chk(screen_create_window_type(&root_win, screen_ctx, SCREEN_ROOT_WINDOW));
-    chk(screen_set_window_property_cv(root_win, SCREEN_PROPERTY_ID_STRING, sizeof(id_str), id_str));
-    chk(screen_set_window_property_iv(root_win, SCREEN_PROPERTY_USAGE, &usage));
-    chk(screen_flush_context(screen_ctx, SCREEN_WAIT_IDLE));
     chk(screen_create_event(&screen_ev));
 
-    const char gid[] = "unity_plugin_group";
+    char group_name[] = "unity_plugin_group";
     chk(screen_create_group(&group, screen_ctx));
-    chk(screen_set_group_property_cv(group, SCREEN_PROPERTY_NAME, sizeof(gid), gid));
+    chk(screen_set_group_property_cv(group, SCREEN_PROPERTY_NAME, sizeof(group_name), group_name));
+    chk(screen_flush_context(screen_ctx, SCREEN_WAIT_IDLE));
+
+    chk(screen_create_window_type(&win, screen_ctx, SCREEN_APPLICATION_WINDOW));
+    chk(screen_join_window_group(win, group_name));
+    chk(screen_set_window_property_cv(win, SCREEN_PROPERTY_ID_STRING, sizeof(id_str), id_str));
+    chk(screen_set_window_property_iv(win, SCREEN_PROPERTY_USAGE, &usage));
 
     // launch the test appliation
     test_window_thr test_win;
-    std::thread test_thr([&]() { test_win.run(running, gid); });
+    std::thread test_thr([&]() { test_win.run(running, group_name); });
 
     EGLDisplay dpy = chk_egl(eglGetDisplay(EGL_DEFAULT_DISPLAY));
     EGLint egl_ctx_attr[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
@@ -84,11 +86,12 @@ main(int argc, char** argv) -> int
             {
                 case SCREEN_EVENT_CREATE:
                 {
+                    std::clog << object_type << "\n";
                     if (object_type == SCREEN_OBJECT_TYPE_WINDOW)
                     {
                         chk(screen_get_event_property_pv(screen_ev, SCREEN_PROPERTY_WINDOW, (void**)&cwin));
                         chk(screen_get_window_property_cv(cwin, SCREEN_PROPERTY_ID, sizeof(cwin_id), cwin_id));
-                        chk(screen_share_window_buffers(root_win, cwin));
+                        chk(screen_share_window_buffers(win, cwin));
                         std::clog << "Window crated " << cwin_id << "\n";
                     }
                     break;
@@ -100,8 +103,6 @@ main(int argc, char** argv) -> int
                 }
             }
         }
-
-        chk(screen_flush_context(screen_ctx, SCREEN_WAIT_IDLE));
     }
 
     running = false;
@@ -109,8 +110,8 @@ main(int argc, char** argv) -> int
     chk_egl(eglDestroyContext(dpy, egl_ctx));
     chk_egl(eglTerminate(dpy));
     chk_egl(eglReleaseThread());
-    chk(screen_destroy_window_buffers(root_win));
-    chk(screen_destroy_window(root_win));
+    chk(screen_destroy_window(win));
+    chk(screen_destroy_group(group));
     chk(screen_destroy_event(screen_ev));
     chk(screen_destroy_context(screen_ctx));
 
