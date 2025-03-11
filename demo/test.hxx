@@ -11,12 +11,11 @@
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
-#include <GLES3/gl3.h>
 
 namespace
 {
-    inline auto // Check error of a call
-    i_chk_error(const char* file, int line, int err) -> int
+    inline int // Check error of a call
+    i_chk_error(const char* file, int line, int err)
     {
         if (err != 0)
         {
@@ -26,8 +25,8 @@ namespace
     }
 
     template <typename R>
-    inline auto // Check error of a call
-    i_chk_egl_error(R&& r, const char* file, int line) -> R
+    inline R&& // Check error of a call
+    i_chk_egl_error(R&& r, const char* file, int line)
     {
         EGLint error = eglGetError();
         auto get_erro_str = [&]()
@@ -80,14 +79,54 @@ namespace
 
         return std::forward<R>(r);
     }
+
+    inline void // Check error of a call
+    i_chk_gl_error(const char* file, int line)
+    {
+        GLenum error = glGetError();
+        auto get_err_str = [&]()
+        {
+            switch (error)
+            {
+                case GL_INVALID_ENUM:
+                    return "An unacceptable value is specified for an enumerated argument. The offending command is "
+                           "ignored and has no other side effect than to set the error flag.";
+
+                case GL_INVALID_VALUE:
+                    return "A numeric argument is out of range. The offending command is ignored and has no other side "
+                           "effect than to set the error flag.";
+
+                case GL_INVALID_OPERATION:
+                    return "The specified operation is not allowed in the current state. The offending command is "
+                           "ignored and has no other side effect than to set the error flag.";
+
+                case GL_INVALID_FRAMEBUFFER_OPERATION:
+                    return "The framebuffer object is not complete. The offending command is ignored and has no other "
+                           "side effect than to set the error flag.";
+
+                case GL_OUT_OF_MEMORY:
+                    return "There is not enough memory left to execute the command. The state of the GL is undefined, "
+                           "except for the state of the error flags, after this error is recorded.";
+                default:
+                    return "Undefined GL error";
+            }
+        };
+
+        if (error != GL_NO_ERROR)
+        {
+            std::cout << "GL ERROR: " << file << ":" << line << ": " << get_err_str() << std::endl;
+        }
+    }
 } // namespace
 
 #ifndef NDEBUG
 #define chk(call)     ::i_chk_error(__FILE__, __LINE__, call)
 #define chk_egl(call) ::i_chk_egl_error(call, __FILE__, __LINE__)
+#define chk_gl(call)  (call, ::i_chk_gl_error(__FILE__, __LINE__))
 #else
 #define chk(call)     call
 #define chk_egl(call) call
+#define chk_gl(call)  call
 #endif
 
 static const char id_str[] = "test_unity_plugin";
@@ -98,21 +137,24 @@ struct test_window_thr
     screen_window_t win_ = nullptr;
     screen_buffer_t win_buf_[2] = {};
 
-    auto //
-    run(std::atomic_bool& running, const char* gid) -> void
+    void //
+    run(std::atomic_bool& running, const char* gid)
     {
-        int usage = SCREEN_USAGE_NATIVE | SCREEN_USAGE_READ | SCREEN_USAGE_WRITE,
+        int usage = SCREEN_USAGE_NATIVE,
             format = SCREEN_FORMAT_RGBA8888, //
             interval = 1,                    //
             nbuffers = 2,                    //
             size[2] = {1920, 1080},          //
-            pos[2] = {0, 0};
+            pos[2] = {0, 0},                 //
+            perm = 0;
         const char test_id_str[] = "test_window";
 
         chk(screen_create_context(&ctx_, SCREEN_APPLICATION_CONTEXT));
         chk(screen_create_window_type(&win_, ctx_, SCREEN_APPLICATION_WINDOW));
-        chk(screen_join_window_group(win_, gid));
+        chk(screen_get_window_property_iv(win_, SCREEN_PROPERTY_PERMISSIONS, &perm));
 
+        perm = ~0;
+        chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_PERMISSIONS, &perm));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_USAGE, &usage));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_FORMAT, &format));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_SWAP_INTERVAL, &interval));
@@ -120,15 +162,17 @@ struct test_window_thr
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_POSITION, pos));
         chk(screen_set_window_property_cv(win_, SCREEN_PROPERTY_ID_STRING, sizeof(test_id_str), test_id_str));
         chk(screen_create_window_buffers(win_, nbuffers));
+        chk(screen_join_window_group(win_, gid));
 
         int changing_color = 0;
         while (running)
         {
-            int win_background[] = {SCREEN_BLIT_COLOR, static_cast<int>(0xff000000) | (changing_color & 0x00ffffff),
+            int win_background[] = {SCREEN_BLIT_COLOR,
+                                    static_cast<int>(0xff000000) | (changing_color & 0xffffff), //
                                     SCREEN_BLIT_END};
             changing_color++;
 
-            chk(screen_get_window_property_pv(win_, SCREEN_PROPERTY_BUFFERS, (void**)win_buf_));
+            chk(screen_get_window_property_pv(win_, SCREEN_PROPERTY_RENDER_BUFFERS, (void**)win_buf_));
             chk(screen_fill(ctx_, win_buf_[0], win_background));
             chk(screen_post_window(win_, win_buf_[0], 0, nullptr, SCREEN_WAIT_IDLE));
         }
