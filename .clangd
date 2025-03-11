@@ -8,7 +8,6 @@ CompileFlags:
         - -D__AARCH64EL__
         - -D__LITTLEENDIAN__
         - -D_QNX_SOURCE
-        - -IC:\Users\fxing\Desktop\unity\Editor\Data\PluginAPI
 Diagnostics:
   Suppress:
     - drv_triple_version_invalid

@@ -159,7 +159,8 @@ main(int argc, char** argv)
                 chk_gl(glBindTexture(GL_TEXTURE_2D, gl_tex));
                 fglEGLImageTargetTexture2D(GL_TEXTURE_2D, egl_image);
                 chk_egl(0);
-                std::cout << 111;
+                std::cout << (void*)egl_image << std::endl;
+                std::cout << gl_tex << std::endl;
 
                 chk(screen_release_buffer(cbuf));
             }

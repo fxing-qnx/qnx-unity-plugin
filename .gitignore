@@ -3,4 +3,5 @@
 !/clang-format
 !/demo
 !/.clangd
+!/compile.sh
 !/graphics-rpi4.conf
