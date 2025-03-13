@@ -2,7 +2,7 @@ CompileFlags:
     Compiler: ntoaarch64-g++
     Add: 
         - -Wall
-        - -std=c++14
+        - -std=c++11
         - -D__QNXNTO__
         - -D__QNX__=800
         - -D__AARCH64EL__

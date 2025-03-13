@@ -140,20 +140,17 @@ struct test_window_thr
     void //
     run(std::atomic_bool& running, const char* gid)
     {
-        int usage = SCREEN_USAGE_NATIVE,
+        int usage = SCREEN_USAGE_NATIVE | SCREEN_USAGE_OPENGL_ES2 | SCREEN_USAGE_OPENGL_ES3,
             format = SCREEN_FORMAT_RGBA8888, //
             interval = 1,                    //
             nbuffers = 2,                    //
             size[2] = {1920, 1080},          //
             pos[2] = {0, 0},                 //
-            perm = 0;
+            perm = ~0;                       // all permissions
         const char test_id_str[] = "test_window";
 
         chk(screen_create_context(&ctx_, SCREEN_APPLICATION_CONTEXT));
         chk(screen_create_window_type(&win_, ctx_, SCREEN_APPLICATION_WINDOW));
-        chk(screen_get_window_property_iv(win_, SCREEN_PROPERTY_PERMISSIONS, &perm));
-
-        perm = ~0;
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_PERMISSIONS, &perm));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_USAGE, &usage));
         chk(screen_set_window_property_iv(win_, SCREEN_PROPERTY_FORMAT, &format));
@@ -174,7 +171,7 @@ struct test_window_thr
 
             chk(screen_get_window_property_pv(win_, SCREEN_PROPERTY_RENDER_BUFFERS, (void**)win_buf_));
             chk(screen_fill(ctx_, win_buf_[0], win_background));
-            chk(screen_post_window(win_, win_buf_[0], 0, nullptr, SCREEN_WAIT_IDLE));
+            chk(screen_post_window(win_, win_buf_[0], 0, nullptr, 0));
         }
 
         chk(screen_leave_window_group(win_));
