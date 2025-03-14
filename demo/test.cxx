@@ -1,30 +1,47 @@
 #include "test.hxx"
 
 #include <thread>
-#include <unistd.h>
+#include <atomic>
+#include <functional>
+
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
+#include <GLES3/gl32.h>
 
 static screen_context_t ctx = nullptr;
 static screen_event_t ev = nullptr;
 static screen_group_t group = nullptr;
 
-enum class BUF_STATE : int
-{
-    READY,
-    BUSY,
-    EXPIRE
-};
-
-static std::atomic_bool reader_paused;
-static std::atomic_bool writer_paused;
-
 static char cwin_id[64] = {};
-static int cwin_size[2] = {};
+static int cwin_size[2] = {200, 200};
 static screen_window_t cwin = nullptr;
-static screen_pixmap_t pixs[2] = {};
-static screen_buffer_t bufs[2] = {};
-static std::atomic<BUF_STATE> avls[2] = {};
 
-void //
+static const int buf_size = 2;
+static int pix_size[buf_size][2] = {};
+static screen_pixmap_t pixs[buf_size] = {};
+static screen_buffer_t bufs[buf_size] = {};
+static std::atomic_bool avls[buf_size] = {};
+static std::function<void()> resets[buf_size] = {};
+
+// GL and EGL
+static EGLDisplay egl_dpy = EGL_NO_DISPLAY;
+static EGLContext egl_ctx = EGL_NO_CONTEXT;
+static GLuint texs[buf_size] = {std::numeric_limits<GLuint>::max(), std::numeric_limits<GLuint>::max()};
+static EGLImage images[buf_size] = {EGL_NO_IMAGE, EGL_NO_IMAGE};
+static PFNEGLCREATEIMAGEKHRPROC feglCreateImage = nullptr;
+static PFNEGLDESTROYIMAGEKHRPROC feglDestroyImage = nullptr;
+static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC fglEGLImageTargetTexture2D = nullptr;
+
+static int pix_usage = SCREEN_USAGE_OPENGL_ES3 | //
+                       SCREEN_USAGE_OPENGL_ES2 | //
+                       SCREEN_USAGE_NATIVE |     //
+                       SCREEN_USAGE_READ |       //
+                       SCREEN_USAGE_WRITE,       //
+    format = SCREEN_FORMAT_RGBA8888;
+
+void // executing in the plugin thread
 handle_win_ev(int ev_type)
 {
     switch (ev_type)
@@ -45,25 +62,41 @@ handle_win_ev(int ev_type)
             chk(screen_get_window_property_iv(tmp_win, SCREEN_PROPERTY_SIZE, cwin_size));
 
             cwin = tmp_win;
-            int pix_usage = SCREEN_USAGE_OPENGL_ES3 | //
-                            SCREEN_USAGE_OPENGL_ES2 | //
-                            SCREEN_USAGE_NATIVE |     //
-                            SCREEN_USAGE_READ,        //
-                format = SCREEN_FORMAT_RGBA8888;
-
-            for (int i = 0; i < sizeof(pixs) / sizeof(pixs[0]); i++)
+            for (int i = 0; i < buf_size; i++)
             {
-                chk(screen_create_pixmap(&pixs[i], ctx));
-                chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_USAGE, &pix_usage));
-                chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_FORMAT, &format));
-                chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_BUFFER_SIZE, cwin_size));
-                chk(screen_create_pixmap_buffer(pixs[i]));
-                chk(screen_get_pixmap_property_pv(pixs[i], SCREEN_PROPERTY_BUFFERS, (void**)(bufs + i)));
+                resets[i] = [i]()
+                {
+                    pix_size[i][0] = cwin_size[0];
+                    pix_size[i][1] = cwin_size[1];
+                    chk_egl(feglDestroyImage(egl_dpy, images[i]));
+                    chk(screen_destroy_pixmap_buffer(pixs[i]));
+
+                    chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_USAGE, &pix_usage));
+                    chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_FORMAT, &format));
+                    chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_BUFFER_SIZE, pix_size[i]));
+                    chk(screen_create_pixmap_buffer(pixs[i]));
+                    chk(screen_get_pixmap_property_pv(pixs[i], SCREEN_PROPERTY_BUFFERS, (void**)(bufs + i)));
+
+                    images[i] = feglCreateImage(egl_dpy, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, //
+                                                (EGLNativePixmapType)pixs[i], nullptr);
+
+                    chk_gl(glBindTexture(GL_TEXTURE_2D, texs[i]));
+                    chk_gl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
+                    chk_gl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
+                    chk_gl(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
+                    chk_gl(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
+                    chk_gl(fglEGLImageTargetTexture2D(GL_TEXTURE_2D, images[i]));
+                    std::cout << "Reset GL texture" << texs[i] << std::endl;
+                };
+                std::cout << "Reset dispatched" << i << std::endl;
             }
 
             std::string joint_msg = "QNX800WindowMapperGroup ";
             joint_msg += cwin_id;
-            joint_msg += " joint";
+            joint_msg += " joint@";
+            joint_msg += std::to_string(cwin_size[0]);
+            joint_msg += "x";
+            joint_msg += std::to_string(cwin_size[1]);
             std::cout << joint_msg << std::endl;
             break;
         }
@@ -71,18 +104,6 @@ handle_win_ev(int ev_type)
         {
             if (cwin)
             {
-                avls[0] = BUF_STATE::EXPIRE;
-                avls[1] = BUF_STATE::EXPIRE;
-                while (!reader_paused || !writer_paused)
-                {
-                    // spin lock
-                }
-
-                for (int i = 0; i < sizeof(pixs) / sizeof(pixs[0]); i++)
-                {
-                    chk(screen_destroy_pixmap_buffer(pixs[i]));
-                    bufs[i] = nullptr;
-                }
                 cwin = nullptr;
 
                 std::string leave_msg = "QNX800WindowMapperGroup ";
@@ -98,57 +119,54 @@ handle_win_ev(int ev_type)
 void //
 write_buf()
 {
-    BUF_STATE state;
-    for (int i = 0; i < 3; i++)
+    // update at 120 fps
+    std::this_thread::sleep_for(std::chrono::microseconds(8333));
+
+    bool ready;
+    for (int i = 0; i < buf_size + 1; i++)
     {
-        int idx = i % 2;
-        if (state = BUF_STATE::READY, avls[idx].compare_exchange_weak(state, BUF_STATE::BUSY))
+        int idx = i % buf_size;
+        if (ready = true, avls[idx].compare_exchange_weak(ready, false))
         {
+            if (resets[idx])
+            {
+                resets[idx]();
+                resets[idx] = nullptr;
+            };
 
-            chk(screen_read_window(cwin, bufs[idx], 0, nullptr, 0));
-            sleep(1);
-            std::cout << "Read to buffer " << idx << std::endl;
-            avls[idx] = BUF_STATE::READY;
+            chk(screen_read_window(cwin, bufs[idx], 0, nullptr, 0)); // error might happen, but expected
+            std::cout << "Writing " << idx << std ::endl;
+            avls[idx] = true;
             break;
-        }
-
-        if (state == BUF_STATE::EXPIRE)
-        {
-            writer_paused = true;
         }
     }
 }
 
-void read_buf()
+int // testing only
+read_buf()
 {
-    BUF_STATE state;
-    for (int i = 0; i < 3; i++)
-    {
-        int idx = i % 2;
-        if (state = BUF_STATE::READY, avls[idx].compare_exchange_weak(state, BUF_STATE::BUSY))
-        {
-            chk(screen_read_window(cwin, bufs[idx], 0, nullptr, 0));
-            sleep(2);
-            std::cout << "Read from buffer " << idx << std::endl;
-            avls[idx] = BUF_STATE::READY;
-            break;
-        }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-        if (state == BUF_STATE::EXPIRE)
+    static int holding = 0;
+    bool ready;
+    for (int i = 0; i < buf_size + 1; i++)
+    {
+        int idx = i % buf_size;
+        if (ready = true, avls[idx].compare_exchange_weak(ready, false))
         {
-            reader_paused = true;
+            std::cout << "Reading " << idx << std ::endl;
+            avls[holding] = true;
+            holding = idx;
+            return texs[idx];
         }
     }
+
+    return -1;
 }
 
 int //
 main(int argc, char** argv)
 {
-    avls[0] = BUF_STATE::EXPIRE;
-    avls[1] = BUF_STATE::EXPIRE;
-    reader_paused = true;
-    writer_paused = true;
-
     chk(screen_create_context(&ctx, SCREEN_APPLICATION_CONTEXT));
     chk(screen_create_event(&ev));
 
@@ -157,10 +175,71 @@ main(int argc, char** argv)
     chk(screen_set_group_property_cv(group, SCREEN_PROPERTY_NAME, sizeof(group_name), group_name));
     chk(screen_flush_context(ctx, SCREEN_WAIT_IDLE));
 
+    // init egl
+    egl_dpy = chk_egl(eglGetDisplay(EGL_DEFAULT_DISPLAY));
+    EGLint egl_configs_size = 0;
+    std::vector<EGLConfig> egl_configs = {};
+    EGLint egl_ctx_attr[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    chk_egl(eglInitialize(egl_dpy, nullptr, nullptr));
+    chk_egl(eglGetConfigs(egl_dpy, nullptr, 0, &egl_configs_size));
+
+    egl_configs.resize(egl_configs_size);
+    chk_egl(eglGetConfigs(egl_dpy, egl_configs.data(), egl_configs_size, &egl_configs_size));
+
+    for (size_t c = 0; c < egl_configs_size && egl_ctx == EGL_NO_CONTEXT; c++)
+    {
+        egl_ctx = chk_egl(eglCreateContext(egl_dpy, egl_configs[c], EGL_NO_CONTEXT, egl_ctx_attr));
+    }
+
+    if (egl_ctx == EGL_NO_CONTEXT)
+    {
+        std::cout << "Can not create egl context\n";
+    }
+    chk_egl(eglMakeCurrent(egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, egl_ctx));
+
+    feglCreateImage = (PFNEGLCREATEIMAGEKHRPROC)chk_egl(eglGetProcAddress("eglCreateImageKHR"));
+    feglDestroyImage = (PFNEGLDESTROYIMAGEKHRPROC)chk_egl(eglGetProcAddress("eglDestroyImageKHR"));
+    fglEGLImageTargetTexture2D =
+        (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)chk_egl(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+
+    // create empty pixmap
+    for (int i = 0; i < buf_size; i++)
+    {
+        chk(screen_create_pixmap(&pixs[i], ctx));
+        chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_USAGE, &pix_usage));
+        chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_FORMAT, &format));
+        chk(screen_set_pixmap_property_iv(pixs[i], SCREEN_PROPERTY_BUFFER_SIZE, cwin_size));
+        chk(screen_create_pixmap_buffer(pixs[i]));
+        chk(screen_get_pixmap_property_pv(pixs[i], SCREEN_PROPERTY_BUFFERS, (void**)(bufs + i)));
+
+        images[i] = feglCreateImage(egl_dpy, EGL_NO_CONTEXT, EGL_NATIVE_PIXMAP_KHR, //
+                                    (EGLNativePixmapType)pixs[i], nullptr);
+
+        pix_size[i][0] = cwin_size[0];
+        pix_size[i][1] = cwin_size[1];
+    }
+
+    chk_gl(glGenTextures(buf_size, texs));
+    for (int t = 0; t < buf_size; t++)
+    {
+        chk_gl(glBindTexture(GL_TEXTURE_2D, texs[t]));
+        chk_gl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST));
+        chk_gl(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST));
+        chk_gl(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE));
+        chk_gl(glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE));
+        chk_gl(fglEGLImageTargetTexture2D(GL_TEXTURE_2D, images[t]));
+    }
+
+    avls[0] = false; // starting at the holding by reader
+    for (int i = 1; i < buf_size; i++)
+    {
+        avls[1] = true;
+    }
+
     std::thread reader_thr(
         []()
         {
-            sleep(4);
+            std::this_thread::sleep_for(std::chrono::seconds(2));
             while (true)
             {
                 read_buf();
@@ -194,6 +273,17 @@ main(int argc, char** argv)
         }
     }
 
+    for (int i = 0; i < buf_size; i++)
+    {
+        chk_egl(feglDestroyImage(egl_dpy, images[i]));
+        chk(screen_destroy_pixmap_buffer(pixs[i]));
+        chk(screen_destroy_pixmap(pixs[i]));
+    }
+
+    chk_egl(eglMakeCurrent(egl_dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
+    chk_egl(eglDestroyContext(egl_dpy, egl_ctx));
+    chk_egl(eglTerminate(egl_dpy));
+    chk_egl(eglReleaseThread());
     chk(screen_destroy_group(group));
     chk(screen_destroy_event(ev));
     chk(screen_destroy_context(ctx));
